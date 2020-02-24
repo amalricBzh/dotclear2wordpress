@@ -17,12 +17,12 @@ beggining of the file. Then :
 
     php convert.php --input=<path/dotclear_flat_file.txt> --output=<path/wordpress_import_file.xml>
 
-You may omit the output parameter, default value is `wordpress.xml
+You may omit the output parameter, default value is `wordpress.xml`.
+
+Then import `wordpress.xml` with WP importer, and unzip the media zip files in
+`wp-content/uploads`. And enjoy!
 
 Is it fully fonctionnal ?
 -----
 Yes and not : it's ok for me, it can import my pages, posts, categories, tags and
-comments.
-
-But it still do not handle images and media library : this is my next and last TODO
-on this project.
+comments, and my media files.

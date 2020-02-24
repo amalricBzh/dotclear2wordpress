@@ -14,7 +14,11 @@ $settings = [
         'url' => 'http://blog.pinsonnais.org',
         'comment_status' => 'open',
         'ping_status' => 'open',
-    ]
+        'image_base_path' => 'wp-content/uploads/importdc',
+    ],
+    'misc' => [
+        'tmp_dir' => 'tmp',
+    ],
 ];
 
 set_error_handler(function ($errno, $errstr, $errfile, $errline, $errcontext) {
@@ -59,13 +63,157 @@ class Dotclear2Wordpress
         $this->printDotClearStats($dotclear);
 
         $xml = $this->generateXml($dotclear);
-        $result = $this->writeOutput($options['output'], $xml);
+        $xml = $this->convertMedia($options['media'], $xml);
 
-        //var_dump($xml);
+        $result = $this->writeOutput($options['output'], $xml);
 
         return $result;
 
     }
+
+    private function convertMedia($zipFilePath, $xml)
+    {
+        if (strlen($zipFilePath) < 3) {
+            return [];
+        }
+        echo "Updating medias:\n";
+        echo "    - Unzipping media file... ";
+
+        $targetDir = $this->config['misc']['tmp_dir'];
+        if (!file_exists($targetDir)) {
+            mkdir($targetDir);
+        }
+        $filesDir = $targetDir . DIRECTORY_SEPARATOR . 'importdc' . DIRECTORY_SEPARATOR;
+
+        // On dézippe l'archive
+        $zipFile = new ZipArchive();
+        if ($zipFile->open($zipFilePath) === TRUE) {
+            $zipFile->extractTo($filesDir);
+            $zipFile->close();
+            echo "OK\n";
+        } else {
+            echo "KO\n";
+            exit(-1);
+        }
+
+        // Pour chaque image nécessaire trouvée dans la sortie xml
+        $matches = [];
+        preg_match_all('^src=\\\"/public/([.A-Za-z0-9_/-]*)\\\"^', $xml, $matches);
+        $files = array_unique($matches[1]);
+        echo "    - Blog images found : " . count($files) . "\n";
+        echo "    - Converting resized images... ";
+
+        // Si l'image n'existe pas, on essaye de la recréer
+        $nbImagesCreated = 0 ;
+        $errors = [] ;
+        foreach ($files as $index => $file) {
+            // le fichier n'existe pas ? Il a du être retaillé et pas exporté par Dotclear :(
+            if (!file_exists($filesDir . $file)) {
+                // Pas grave, on va le recréer !
+                $res = $this->createImage($filesDir . $file);
+                if ($res === true) {
+                    $nbImagesCreated ++ ;
+                } else {
+                    $errors[] = $res ;
+                }
+            }
+        }
+        echo "$nbImagesCreated image(s) created.\n";
+        if (count($errors) > 0) {
+            foreach ($errors as $error) {
+                echo "      $error\n";
+            }
+        }
+
+        echo "    - Writing new zip File\n";
+        // On va créer une archive Zip avec les nouvelles images
+        $this->zipDirectory($targetDir, dirname($zipFilePath) . DIRECTORY_SEPARATOR . 'Unzip_in_uploads.zip');
+
+        // maintenant on remplace dans le XML les anciens chemins par les nouveaux
+        $newResourceDir = $this->config['blog']['url'] . '/' . $this->config['blog']['image_base_path'] . '/' ;
+        $xml = str_replace('src=\"/public/', 'src=\"' . $newResourceDir, $xml);
+        $xml = str_replace('href=\"/public/', 'href=\"' . $newResourceDir, $xml);
+
+        return $xml;
+    }
+
+    private function zipDirectory($source, $destination)
+    {
+        // Get real path for our folder
+        $rootPath = realpath($source);
+
+        // Initialize archive object
+        $zip = new ZipArchive();
+        $zip->open($destination, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+
+        // Create recursive directory iterator
+        /** @var SplFileInfo[] $files */
+        $files = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($rootPath),
+            RecursiveIteratorIterator::LEAVES_ONLY
+        );
+
+        foreach ($files as $name => $file) {
+            // Skip directories (they would be added automatically)
+            if (!$file->isDir()) {
+                // Get real and relative path for current file
+                $filePath = $file->getRealPath();
+                $relativePath = substr($filePath, strlen($rootPath) + 1);
+
+                // Add current file to archive
+                $zip->addFile($filePath, $relativePath);
+            }
+        }
+
+        // Zip archive will be created only after closing object
+        $zip->close();
+    }
+
+    private function createImage($file)
+    {
+        // get original filename
+        $pathInfo = pathinfo($file);
+
+        // Get original filename
+        $size = substr($pathInfo['filename'], -2);
+        $filename = substr($pathInfo['filename'], 1, -2);
+        $realname = $pathInfo['dirname'] . DIRECTORY_SEPARATOR . $filename . '.' . $pathInfo['extension'];
+        $format = $pathInfo['extension'];
+
+
+        if (!file_exists($realname)) {
+            // DC met ses vignettes en jpg, mais l'orignal est peut-être en png. On check.
+            $realname = $pathInfo['dirname'] . DIRECTORY_SEPARATOR . $filename . '.png';
+            $format = 'png';
+            if (!file_exists($realname)) {
+                return "ERROR: File not found:    $file  => $realname  => Image will not be processed.";
+            }
+        }
+
+        list($width, $height, $type, $attr) = getimagesize($realname);
+        list($newHeight, $newWidth) = $this->getFinalSize($size, $width, $height);
+
+        // Nouvelle image
+        $dest = imagecreatetruecolor($newWidth, $newHeight);
+        if ($format === 'jpg') {
+            $source = imagecreatefromjpeg($realname);
+        } else {
+            $source = imagecreatefrompng($realname);
+        }
+        // On retaille
+        imagecopyresized($dest, $source, 0, 0, 0, 0, $newWidth, $newHeight, $width, $height);
+        if ($format === 'jpg') {
+            imagejpeg($dest, $file);
+        } else {
+            imagepng($dest, $file);
+        }
+        imagedestroy($source);
+        imagedestroy($dest);
+
+        return true;
+
+    }
+
 
     protected function generateXml($dotclear)
     {
@@ -145,6 +293,7 @@ class Dotclear2Wordpress
         $longOpts = [
             "input::",
             "output::",
+            "media::",
         ];
 
         $options = getopt(null, $longOpts);
@@ -158,6 +307,10 @@ class Dotclear2Wordpress
             $options['output'] = 'wordpress.xml';
         }
 
+        if (empty($options['media'])) {
+            $options['media'] = '';
+        }
+
         return $options;
     }
 
@@ -165,11 +318,16 @@ class Dotclear2Wordpress
     protected function printUsage()
     {
         echo "    Usage :\n";
-        echo "        " . basename(__FILE__) . " --input=<dotclear_flat_file.txt> --output=<" . $this->defaultOutputFilename . ">\n";
+        echo "        " . basename(__FILE__) . " --input=<dotclear_flat_file.txt> --output=<" .
+            $this->defaultOutputFilename . "> --media=<media_file.zip>\n";
         echo "    Options :\n";
         echo "        - input : Mandatory. The name of the Dotclear flatfile to convert.\n";
         echo "        - output: Optionnal. The name of the converted file in Worpress format.\n";
         echo "          Default value is " . $this->defaultOutputFilename . ".\n";
+        echo "        - media: Optionnal. If not present, images WILL NOT be converted.\n";
+        echo "          If present, missing images will be create and an new \"Unzip_in_uploads.zip\"\n" .
+             "          file will be created, and you should unzip this file in your Wordpress's " .
+             "          wp-content/uploads/ directory.";
     }
 
     protected function printDotClearStats($dotclear)
@@ -927,5 +1085,30 @@ class Dotclear2Wordpress
         }
 
         return $text;
+    }
+
+    /**
+     * @param $size
+     * @param $width
+     * @param $height
+     * @return array
+     */
+    private function getFinalSize($size, $width, $height)
+    {
+        $max = 448;
+        if ($size === '_s') {
+            $max = 240;
+        }
+
+        if ($width > $max) {
+            $height = $max * $height / $width;
+            $width = $max;
+        }
+        if ($height > $max) {
+            $width = $max * $width / $height;
+            $height = $max;
+        }
+
+        return array((int)$height, (int)$width);
     }
 }

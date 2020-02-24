@@ -14,7 +14,7 @@ $settings = [
         'url' => 'http://blog.pinsonnais.org',
         'comment_status' => 'open',
         'ping_status' => 'open',
-        'image_base_path' => 'wp-content/uploads/importdc',
+        'image_base_path' => 'wp-content/uploads/sites/2/importdc/',
     ],
     'misc' => [
         'tmp_dir' => 'tmp',
@@ -132,7 +132,9 @@ class Dotclear2Wordpress
         // maintenant on remplace dans le XML les anciens chemins par les nouveaux
         $newResourceDir = $this->config['blog']['url'] . '/' . $this->config['blog']['image_base_path'] . '/' ;
         $xml = str_replace('src=\"/public/', 'src=\"' . $newResourceDir, $xml);
+        $xml = str_replace('src=\"'. $this->config['blog']['url'].'/public/', 'src=\"' . $newResourceDir, $xml);
         $xml = str_replace('href=\"/public/', 'href=\"' . $newResourceDir, $xml);
+        $xml = str_replace('href=\"'. $this->config['blog']['url'].'/public/', 'href=\"' . $newResourceDir, $xml);
 
         return $xml;
     }
@@ -487,6 +489,10 @@ class Dotclear2Wordpress
         $node = $dom->createElement('description');
         $itemNode->appendChild($node);
 
+        $post['post_content'] = str_replace('\r\n', " ", $post['post_content']);
+        $post['post_content'] = str_replace('\n', " ", $post['post_content']);
+        $post['post_content'] = str_replace('\n', " ", $post['post_content']);
+
         $node = $dom->createElement('content:encoded');
         $cdata = $dom->createCDATASection($post['post_content']);
         $node->appendChild($cdata);
@@ -533,7 +539,7 @@ class Dotclear2Wordpress
         $status = 'published';
         switch ($post['post_status']) {
             case 1 :
-                $status = 'published';
+                $status = 'publish';
                 break;
             case 0 :
                 $status = 'trash';

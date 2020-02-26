@@ -783,6 +783,11 @@ class Dotclear2Wordpress
         $node->appendChild($cdata);
         $commentNode->appendChild($node);
 
+        // On supprime les inutiles\r\n que DC a mis partout
+        $comment['comment_content'] = str_replace('\r\n', " ", $comment['comment_content']);
+        $comment['comment_content'] = str_replace('\n', " ", $comment['comment_content']);
+        $comment['comment_content'] = str_replace('\n', " ", $comment['comment_content']);
+
         $node = $dom->createElement('wp:comment_content');
         $cdata = $dom->createCDATASection($comment['comment_content']);
         $node->appendChild($cdata);

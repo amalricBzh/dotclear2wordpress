@@ -14,10 +14,11 @@ $settings = [
         'url' => 'http://blog.pinsonnais.org',
         'comment_status' => 'open',
         'ping_status' => 'open',
-        'image_base_path' => 'wp-content/uploads/sites/2/importdc/',
+        'image_base_path' => 'wp-content/uploads/sites/2',
     ],
-    'misc' => [
-        'tmp_dir' => 'tmp',
+    'media' => [
+        'source_dir' => 'tmp/import_dc',
+        'target_dir' => 'tmp/uploads',
     ],
 ];
 
@@ -41,6 +42,7 @@ class Dotclear2Wordpress
     private $config = [];
     private $maxTermid = 1;
     private $dotclear = [];
+    private $medias = [];
 
 
     public function __construct($config)
@@ -57,13 +59,21 @@ class Dotclear2Wordpress
         $dotclear = $this->dotclearConvertMeta($dotclear);
         $dotclear = $this->dotclearConvertCategories($dotclear);
         $this->dotclear = $dotclear;
-        //var_dump($dotclear['tag']);
-        //$dotclear = $this->dotclearConvertCategories($dotclear);
 
         $this->printDotClearStats($dotclear);
 
         $xml = $this->generateXml($dotclear);
-        $xml = $this->convertMedia($options['media'], $xml);
+
+        // maintenant quelque chose de pas très propre: les images ont été copiées dans la
+        // nouvelle arborescence, mais les urls ne sont aps à jour dans les posts...
+        // De plus, les images retaillées par DC ne font pas partie de l'export.
+        // On va donc chercher toutes ces images dans le xml (/public.../), puis si l'image
+        // n'existe pas (retaillée) essayer de la créer, et remplacer enfin le chemin dans
+        // xml. Bouh c'est un peu crado tout ça, mais ça marche et c'est pour du one-shot.
+        $imagesInPosts = $this->searchImgInPosts($xml);
+        $xml = $this->createResizedImages($imagesInPosts, $xml);
+        $xml = $this->replaceMediaPath($xml);
+
 
         $result = $this->writeOutput($options['output'], $xml);
 
@@ -71,47 +81,85 @@ class Dotclear2Wordpress
 
     }
 
-    private function convertMedia($zipFilePath, $xml)
+    // Copie tous les medias dans un nouveau répertoire Upload.
+    private function convertMedia()
     {
-        if (strlen($zipFilePath) < 3) {
+        $sourceDir = $this->config['media']['source_dir'];
+        if (!file_exists($sourceDir)) {
             return [];
         }
-        echo "Updating medias:\n";
-        echo "    - Unzipping media file... ";
 
-        $targetDir = $this->config['misc']['tmp_dir'];
+        echo "    Copying medias: ";
+
+        $targetDir = $this->config['media']['target_dir'];
         if (!file_exists($targetDir)) {
-            mkdir($targetDir);
+            mkdir($targetDir, 0777, true);
         }
-        $filesDir = $targetDir . DIRECTORY_SEPARATOR . 'importdc' . DIRECTORY_SEPARATOR;
+        $filesDir = $sourceDir . DIRECTORY_SEPARATOR;
 
-        // On dézippe l'archive
-        $zipFile = new ZipArchive();
-        if ($zipFile->open($zipFilePath) === TRUE) {
-            $zipFile->extractTo($filesDir);
-            $zipFile->close();
-            echo "OK\n";
-        } else {
-            echo "KO\n";
-            exit(-1);
+        /** @var SplFileInfo[] $files */
+        $files = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($filesDir),
+            RecursiveIteratorIterator::LEAVES_ONLY
+        );
+
+        $movedFiles = [];
+        // On copie tous les fichiers dans upload/2020/02/
+        foreach ($files as $name => $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+            $fullFilename = trim(str_replace($sourceDir, '', $file->getPathname()), '\\');
+            $newFilename = str_replace(['/', '\\'], '_', $fullFilename);
+            $newPath = gmdate('Y/m', $file->getCTime());
+            $currentFile = [
+                'original_pathname' => $fullFilename,
+                'new_pathname' => $newPath . '/' . $newFilename,
+            ];
+
+            if (!file_exists($targetDir . DIRECTORY_SEPARATOR . $newPath)) {
+                mkdir($targetDir . DIRECTORY_SEPARATOR . $newPath, 0777, true);
+            }
+
+            copy(
+                $sourceDir . DIRECTORY_SEPARATOR . $fullFilename,
+                $targetDir . DIRECTORY_SEPARATOR . $newPath . DIRECTORY_SEPARATOR . $newFilename
+            );
+
+            $movedFiles[$currentFile['original_pathname']] = $currentFile;
         }
+        echo count($movedFiles) . " files copied.\n";
 
+        return $movedFiles;
+    }
+
+    public function searchImgInPosts($xml)
+    {
+        echo "    Searching images in posts: " ;
         // Pour chaque image nécessaire trouvée dans la sortie xml
         $matches = [];
         preg_match_all('^src=\\\"/public/([.A-Za-z0-9_/-]*)\\\"^', $xml, $matches);
         $files = array_unique($matches[1]);
-        echo "    - Blog images found : " . count($files) . "\n";
-        echo "    - Converting resized images... ";
+        preg_match_all('^src=\\\"' . $this->config['blog']['url'] . '/public/([.A-Za-z0-9_/-]*)\\\"^', $xml, $matches);
+        $files2 = array_unique($matches[1]);
+        $files = array_unique(array_merge($files, $files2));
+        echo count($files) . " images found.\n";
 
+        return $files;
+    }
+
+    public function createResizedImages($imagesInPost, $xml)
+    {
+        echo "    Converting resized images: ";
         // Si l'image n'existe pas, on essaye de la recréer
         $nbImagesCreated = 0 ;
-        $errors = [] ;
-        foreach ($files as $index => $file) {
+        foreach ($imagesInPost as $index => $file) {
             // le fichier n'existe pas ? Il a du être retaillé et pas exporté par Dotclear :(
-            if (!file_exists($filesDir . $file)) {
+            if (!file_exists($this->config['media']['source_dir'] . DIRECTORY_SEPARATOR . $file)) {
                 // Pas grave, on va le recréer !
-                $res = $this->createImage($filesDir . $file);
-                if ($res === true) {
+                $res = $this->createImage($file);
+                if ($res !== false) {
+                    $this->medias[$res['original_pathname']] = $res ;
                     $nbImagesCreated ++ ;
                 } else {
                     $errors[] = $res ;
@@ -119,62 +167,17 @@ class Dotclear2Wordpress
             }
         }
         echo "$nbImagesCreated image(s) created.\n";
-        if (count($errors) > 0) {
-            foreach ($errors as $error) {
-                echo "      $error\n";
-            }
-        }
-
-        echo "    - Writing new zip File\n";
-        // On va créer une archive Zip avec les nouvelles images
-        $this->zipDirectory($targetDir, dirname($zipFilePath) . DIRECTORY_SEPARATOR . 'Unzip_in_uploads.zip');
-
-        // maintenant on remplace dans le XML les anciens chemins par les nouveaux
-        $newResourceDir = $this->config['blog']['url'] . '/' . $this->config['blog']['image_base_path'] . '/' ;
-        $xml = str_replace('src=\"/public/', 'src=\"' . $newResourceDir, $xml);
-        $xml = str_replace('src=\"'. $this->config['blog']['url'].'/public/', 'src=\"' . $newResourceDir, $xml);
-        $xml = str_replace('href=\"/public/', 'href=\"' . $newResourceDir, $xml);
-        $xml = str_replace('href=\"'. $this->config['blog']['url'].'/public/', 'href=\"' . $newResourceDir, $xml);
 
         return $xml;
     }
 
-    private function zipDirectory($source, $destination)
-    {
-        // Get real path for our folder
-        $rootPath = realpath($source);
-
-        // Initialize archive object
-        $zip = new ZipArchive();
-        $zip->open($destination, ZipArchive::CREATE | ZipArchive::OVERWRITE);
-
-        // Create recursive directory iterator
-        /** @var SplFileInfo[] $files */
-        $files = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($rootPath),
-            RecursiveIteratorIterator::LEAVES_ONLY
-        );
-
-        foreach ($files as $name => $file) {
-            // Skip directories (they would be added automatically)
-            if (!$file->isDir()) {
-                // Get real and relative path for current file
-                $filePath = $file->getRealPath();
-                $relativePath = substr($filePath, strlen($rootPath) + 1);
-
-                // Add current file to archive
-                $zip->addFile($filePath, $relativePath);
-            }
-        }
-
-        // Zip archive will be created only after closing object
-        $zip->close();
-    }
-
     private function createImage($file)
     {
+        $sourceDir = $this->config['media']['source_dir'] ;
+        $targetDir = $this->config['media']['target_dir'] ;
+
         // get original filename
-        $pathInfo = pathinfo($file);
+        $pathInfo = pathinfo($sourceDir . DIRECTORY_SEPARATOR . $file);
 
         // Get original filename
         $size = substr($pathInfo['filename'], -2);
@@ -182,13 +185,13 @@ class Dotclear2Wordpress
         $realname = $pathInfo['dirname'] . DIRECTORY_SEPARATOR . $filename . '.' . $pathInfo['extension'];
         $format = $pathInfo['extension'];
 
-
         if (!file_exists($realname)) {
             // DC met ses vignettes en jpg, mais l'orignal est peut-être en png. On check.
             $realname = $pathInfo['dirname'] . DIRECTORY_SEPARATOR . $filename . '.png';
             $format = 'png';
             if (!file_exists($realname)) {
-                return "ERROR: File not found:    $file  => $realname  => Image will not be processed.";
+                echo "\n !!! ERROR: File not found: $file => Image will not be processed.\n    ";
+                return false;
             }
         }
 
@@ -204,22 +207,33 @@ class Dotclear2Wordpress
         }
         // On retaille
         imagecopyresized($dest, $source, 0, 0, 0, 0, $newWidth, $newHeight, $width, $height);
+        $newFilename = str_replace(['/', '\\'], '_', $file);
+        $newPath = gmdate('Y/m', filectime($realname)) .'/';
+        if (!file_exists($targetDir . '/' . $newPath)) {
+            mkdir($targetDir . '/' . $newPath, 0777, true);
+        }
         if ($format === 'jpg') {
-            imagejpeg($dest, $file);
+            imagejpeg($dest, $targetDir . '/' . $newPath . $newFilename);
         } else {
-            imagepng($dest, $file);
+            imagepng($dest, $targetDir . '/' . $newPath . $newFilename);
         }
         imagedestroy($source);
         imagedestroy($dest);
 
-        return true;
+        $filetime = filectime($realname);
+        touch($targetDir . '/' . $newPath . $newFilename, $filetime);
+
+        return [
+            'original_pathname' => $file,
+            'new_pathname' => $newPath .  $newFilename,
+        ];
 
     }
 
 
     protected function generateXml($dotclear)
     {
-        $data = "Data";
+        echo "    Generating XML\n";
         $dom = new DOMDocument('1.0', 'UTF-8');
         // Pour un formatage lisible
         $dom->formatOutput = true;
@@ -321,15 +335,11 @@ class Dotclear2Wordpress
     {
         echo "    Usage :\n";
         echo "        " . basename(__FILE__) . " --input=<dotclear_flat_file.txt> --output=<" .
-            $this->defaultOutputFilename . "> --media=<media_file.zip>\n";
+            $this->defaultOutputFilename . ">\n";
         echo "    Options :\n";
         echo "        - input : Mandatory. The name of the Dotclear flatfile to convert.\n";
         echo "        - output: Optionnal. The name of the converted file in Worpress format.\n";
         echo "          Default value is " . $this->defaultOutputFilename . ".\n";
-        echo "        - media: Optionnal. If not present, images WILL NOT be converted.\n";
-        echo "          If present, missing images will be create and an new \"Unzip_in_uploads.zip\"\n" .
-             "          file will be created, and you should unzip this file in your Wordpress's " .
-             "          wp-content/uploads/ directory.";
     }
 
     protected function printDotClearStats($dotclear)
@@ -359,6 +369,10 @@ class Dotclear2Wordpress
 
         $domAttribute = $dom->createAttribute('xmlns:content');
         $domAttribute->value = 'http://purl.org/rss/1.0/modules/content/';
+        $rssNode->appendChild($domAttribute);
+
+        $domAttribute = $dom->createAttribute('xmlns:wfw');
+        $domAttribute->value = 'http://wellformedweb.org/CommentAPI/';
         $rssNode->appendChild($domAttribute);
 
         $domAttribute = $dom->createAttribute('xmlns:dc');
@@ -410,41 +424,17 @@ class Dotclear2Wordpress
             $this->addTermNodeFromTag($dom, $tag, $channelNode);
         }
 
+        // On convertit les medias
+        $this->medias = $medias = $this->convertMedia();
+        foreach ($medias as $key => $media) {
+            $this->addItemNodeFromMedia($dom, $media, $channelNode);
+        }
+
         // On s'occupe des articles
         foreach ($dotclearData['post'] as $key => $post) {
             $this->addItemNode($dom, $post, $channelNode);
         }
 
-
-        // $dotclearData['link'] : RIEN
-        // $dotclearData['setting'] : RIEN
-        // $dotclearData['post']
-        // $dotclearData['media']
-        // $dotclearData['comment']
-        // $dotclearData['meta']
-        // $dotclearData['term']
-
-        /*
-                foreach ($dotclearData as $type => $data) {
-                    switch ($type) {
-                        case 'category':
-                            foreach ($data as $key => $category) {
-                                $this->addCategoryNode($dom, $category, $channelNode);
-                                // Pour chaque catégorie, on ajoute aussi un term
-                                $this->addTermNode($dom, $category, $channelNode);
-                            }
-                            break;
-                        case 'link':
-                            // links are ignored for now. Maybe special items ?
-                            break;
-                        case 'setting':
-                            // Nothing to do with settings
-                            break;
-                        default:
-                            echo "WARNING : unknow data type : $type. Skipped.\n";
-                    }
-                }
-        */
 
         $rssNode->appendChild($channelNode);
     }
@@ -452,6 +442,7 @@ class Dotclear2Wordpress
     protected function addItemNode(DOMDocument $dom, $post, DOMElement $channelNode)
     {
         if (!in_array($post['post_type'], ['post', 'page'])) {
+            echo "ERROR: Unknown post_type.\n";
             var_dump($post);
             die;
         }
@@ -489,6 +480,7 @@ class Dotclear2Wordpress
         $node = $dom->createElement('description');
         $itemNode->appendChild($node);
 
+        // On supprime les inutiles\r\n que DC a mis partout
         $post['post_content'] = str_replace('\r\n', " ", $post['post_content']);
         $post['post_content'] = str_replace('\n', " ", $post['post_content']);
         $post['post_content'] = str_replace('\n', " ", $post['post_content']);
@@ -536,7 +528,7 @@ class Dotclear2Wordpress
             var_dump($post);
             die;
         }
-        $status = 'published';
+        $status = 'publish';
         switch ($post['post_status']) {
             case 1 :
                 $status = 'publish';
@@ -628,6 +620,129 @@ class Dotclear2Wordpress
             //var_dump($comment);die;
 
         }
+
+        $channelNode->appendChild($itemNode);
+    }
+
+    protected function addItemNodeFromMedia(DOMDocument $dom, $media, DOMElement $channelNode)
+    {
+        static $postId = 5000;
+        $sourceDir = $this->config['media']['source_dir'];
+        $targetDir = $this->config['media']['target_dir'];
+        $pathInfo = pathinfo($targetDir . DIRECTORY_SEPARATOR . $media['new_pathname']);
+
+        $itemNode = $dom->createElement('item');
+
+        $node = $dom->createElement('title', $pathInfo['filename']);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement(
+            'link',
+            $this->config['blog']['url'] . '/image/' . $pathInfo['filename'] . '/'
+        );
+        $itemNode->appendChild($node);
+
+        $date = new DateTime();
+        $node = $dom->createElement(
+            'pubDate',
+            $date->format('D, j M Y H:i:s O')
+        );
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('dc:creator');
+        $cdata = $dom->createCDATASection($this->config['author']['display_name']);
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement(
+            'guid',
+            $this->config['blog']['url'] . '/wp-content/uploads/' . $media['new_pathname']);
+        $domAttribute = $dom->createAttribute('isPermaLink');
+        $domAttribute->value = 'false';
+        $node->appendChild($domAttribute);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('description');
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('content:encoded');
+        $cdata = $dom->createCDATASection(null);
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('excerpt:encoded');
+        $cdata = $dom->createCDATASection(null);
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:post_id', $postId++);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:post_date');
+        $cdata = $dom->createCDATASection($date->format('Y-m-d H:i:s'));
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:post_date_gmt');
+        $cdata = $dom->createCDATASection($date->format('Y-m-d H:i:s'));
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:comment_status');
+        $cdata = $dom->createCDATASection('closed');
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:ping_status');
+        $cdata = $dom->createCDATASection('closed');
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:post_name');
+        $cdata = $dom->createCDATASection($this->slugify($pathInfo['filename']));
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:status');
+        $cdata = $dom->createCDATASection('inherit');
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:post_parent', 0);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:menu_order', 0);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:post_type');
+        $cdata = $dom->createCDATASection('attachment');
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:post_password');
+        $cdata = $dom->createCDATASection(null);
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:is_sticky', 0);
+        $itemNode->appendChild($node);
+
+        $blog = $this->config['blog'];
+        $node = $dom->createElement('wp:attachment_url');
+        $cdata = $dom->createCDATASection($blog['url']. '/'. $blog['image_base_path'] . '/' . $media['new_pathname']);
+        $node->appendChild($cdata);
+        $itemNode->appendChild($node);
+
+        $node = $dom->createElement('wp:postmeta');
+        $subNode = $dom->createElement('wp:meta_key');
+        $cdata = $dom->createCDATASection('_wp_attached_file');
+        $subNode->appendChild($cdata);
+        $node->appendChild($subNode);
+        $subNode = $dom->createElement('wp:meta_value');
+        $cdata = $dom->createCDATASection($media['new_pathname']);
+        $subNode->appendChild($cdata);
+        $node->appendChild($subNode);
+        $itemNode->appendChild($node);
 
         $channelNode->appendChild($itemNode);
     }
@@ -988,7 +1103,7 @@ class Dotclear2Wordpress
         $now = new DateTime();
         $generatorNode = $dom->createElement(
             'pubDate',
-            $now->format('d F Y H:m:i')
+            $now->format('D, j M Y H:i:s O')
         );
         $channelNode->appendChild($generatorNode);
     }
@@ -1116,5 +1231,25 @@ class Dotclear2Wordpress
         }
 
         return array((int)$height, (int)$width);
+    }
+
+    /**
+     * @param $xml
+     * @return string
+     */
+    private function replaceMediaPath($xml)
+    {
+        $blog = $this->config['blog'];
+        foreach ($this->medias as $key => $media) {
+            $src = "/public/" . str_replace('\\', '/', $media['original_pathname']);
+            $dest =  '/' . $blog['image_base_path'] . '/' . $media['new_pathname'];
+            //echo $src . "     =>    " . $dest . "\n" ;
+            // maintenant on remplace dans le XML les anciens chemins par les nouveaux
+            $xml = str_replace('src=\"' . $src, 'src=\"' . $dest, $xml);
+            $xml = str_replace('src=\"' . $blog['url'] . $src, 'src=\"' . $dest, $xml);
+            $xml = str_replace('href=\"' . $src, 'href=\"' . $dest, $xml);
+            $xml = str_replace('href=\"' . $blog['url'] . $src, 'href=\"' . $dest, $xml);
+        }
+        return $xml;
     }
 }

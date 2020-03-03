@@ -1,17 +1,16 @@
 <?php
 
 // Settings : Change and customize this according to your future WP blog
-
 $settings = [
     'author' => [
-        'login' => 'Amaury',
+        'login' => 'AmalricBzh',
         'email' => 'xxx@xxx.xxx',
-        'display_name' => 'Amaury',
-        'first_name' => 'Amaury',
-        'last_name' => 'de la Pinsonnais'
+        'display_name' => 'AmalricBzh',
+        'first_name' => 'Amalric',
+        'last_name' => 'Bzh'
     ],
     'blog' => [
-        'url' => 'http://blog.pinsonnais.org',
+        'url' => 'http://blog.amalricbzh.org',
         'comment_status' => 'open',
         'ping_status' => 'open',
         'image_base_path' => 'wp-content/uploads/sites/2',
@@ -418,10 +417,12 @@ class Dotclear2Wordpress
         }
         // On ajoute maintenant les tags
         // On s'occupe d'abord des catégories
-        foreach ($dotclearData['tag'] as $key => $tag) {
-            $this->addTagNode($dom, $tag, $channelNode);
-            // Pour chaque tag, on ajoute aussi un term
-            $this->addTermNodeFromTag($dom, $tag, $channelNode);
+        if (array_key_exists('tag', $dotclearData)) {
+            foreach ($dotclearData['tag'] as $key => $tag) {
+                $this->addTagNode($dom, $tag, $channelNode);
+                // Pour chaque tag, on ajoute aussi un term
+                $this->addTermNodeFromTag($dom, $tag, $channelNode);
+            }
         }
 
         // On convertit les medias
@@ -448,7 +449,7 @@ class Dotclear2Wordpress
         }
         $itemNode = $dom->createElement('item');
 
-        $node = $dom->createElement('title', $post['post_title']);
+        $node = $dom->createElement('title', htmlentities($post['post_title']));
         $itemNode->appendChild($node);
 
         $node = $dom->createElement(

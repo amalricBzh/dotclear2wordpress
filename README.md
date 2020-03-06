@@ -22,11 +22,13 @@ It's very simple. First of all, `git clone` this project.
 
 You may omit the output parameter, default value is `wordpress.xml`.
 
-5. Then import `wordpress.xml` with WP importer, and unzip the media zip files in
+5. Then import `wordpress.xml` with WP importer, and move the new content files in
 `wp-content/uploads` (the `image_base_path` parameter of step 3). And enjoy!
 
 Is it fully fonctionnal ?
 -----
 Yes and not : it's ok for me, it can import my pages, posts, categories, tags and
-comments, and my media files. But it miss some functionnality I do not need. Feel 
+comments, and my media files. I migrated two blogs, one with 700 articles.
+
+But it miss some functionnality I do not need. Feel 
 free to improve the script and submit your pull requests !

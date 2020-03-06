@@ -1,17 +1,18 @@
 <?php
 
-// Settings : Change and customize this according to your future WP blog
+ini_set('memory_limit', '2047M');
 
+// Settings : Change and customize this according to your future WP blog
 $settings = [
     'author' => [
-        'login' => 'Amaury',
+        'login' => 'AmalricBzh',
         'email' => 'xxx@xxx.xxx',
-        'display_name' => 'Amaury',
-        'first_name' => 'Amaury',
-        'last_name' => 'de la Pinsonnais'
+        'display_name' => 'AmalricBzh',
+        'first_name' => 'Amalric',
+        'last_name' => 'Bzh'
     ],
     'blog' => [
-        'url' => 'http://blog.pinsonnais.org',
+        'url' => 'http://blog.amalricbzh.org',
         'comment_status' => 'open',
         'ping_status' => 'open',
         'image_base_path' => 'wp-content/uploads/sites/2',
@@ -296,6 +297,8 @@ class Dotclear2Wordpress
             }
         }
 
+        unset($filecontent);
+
         return $organizedContent;
     }
 
@@ -418,10 +421,18 @@ class Dotclear2Wordpress
         }
         // On ajoute maintenant les tags
         // On s'occupe d'abord des catégories
-        foreach ($dotclearData['tag'] as $key => $tag) {
-            $this->addTagNode($dom, $tag, $channelNode);
-            // Pour chaque tag, on ajoute aussi un term
-            $this->addTermNodeFromTag($dom, $tag, $channelNode);
+        if (array_key_exists('tag', $dotclearData)) {
+            foreach ($dotclearData['tag'] as $key => $tag) {
+                $this->addTagNode($dom, $tag, $channelNode);
+                // Pour chaque tag, on ajoute aussi un term
+                $this->addTermNodeFromTag($dom, $tag, $channelNode);
+            }
+        }
+
+        // On convertit les medias
+        $this->medias = $medias = $this->convertMedia();
+        foreach ($medias as $key => $media) {
+            $this->addItemNodeFromMedia($dom, $media, $channelNode);
         }
 
         // On convertit les medias
@@ -441,6 +452,8 @@ class Dotclear2Wordpress
 
     protected function addItemNode(DOMDocument $dom, $post, DOMElement $channelNode)
     {
+        $invalid_characters = '/[^\x9\xa\x20-\xD7FF\xE000-\xFFFD]/';
+
         if (!in_array($post['post_type'], ['post', 'page'])) {
             echo "ERROR: Unknown post_type.\n";
             var_dump($post);
@@ -448,7 +461,9 @@ class Dotclear2Wordpress
         }
         $itemNode = $dom->createElement('item');
 
-        $node = $dom->createElement('title', $post['post_title']);
+        $node = $dom->createElement('title');
+        $cdata = $dom->createCDATASection($post['post_title']);
+        $node->appendChild($cdata);
         $itemNode->appendChild($node);
 
         $node = $dom->createElement(
@@ -486,7 +501,8 @@ class Dotclear2Wordpress
         $post['post_content'] = str_replace('\n', " ", $post['post_content']);
 
         $node = $dom->createElement('content:encoded');
-        $cdata = $dom->createCDATASection($post['post_content']);
+        $content = preg_replace($invalid_characters, '', $post['post_content'] );
+        $cdata = $dom->createCDATASection($content);
         $node->appendChild($cdata);
         $itemNode->appendChild($node);
 
@@ -1182,6 +1198,7 @@ class Dotclear2Wordpress
                 unset($dotclear['meta']);
             }
         }
+        unset($dotclear['meta']);
         return $dotclear;
     }
 

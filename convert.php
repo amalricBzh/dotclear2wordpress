@@ -435,6 +435,12 @@ class Dotclear2Wordpress
             $this->addItemNodeFromMedia($dom, $media, $channelNode);
         }
 
+        // On convertit les medias
+        $this->medias = $medias = $this->convertMedia();
+        foreach ($medias as $key => $media) {
+            $this->addItemNodeFromMedia($dom, $media, $channelNode);
+        }
+
         // On s'occupe des articles
         foreach ($dotclearData['post'] as $key => $post) {
             $this->addItemNode($dom, $post, $channelNode);

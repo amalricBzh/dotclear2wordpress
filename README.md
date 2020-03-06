@@ -28,5 +28,7 @@ You may omit the output parameter, default value is `wordpress.xml`.
 Is it fully fonctionnal ?
 -----
 Yes and not : it's ok for me, it can import my pages, posts, categories, tags and
-comments, and my media files. But it miss some functionnality I do not need. Feel 
+comments, and my media files. I migrated two blogs, one with 700 articles.
+
+But it miss some functionnality I do not need. Feel 
 free to improve the script and submit your pull requests !

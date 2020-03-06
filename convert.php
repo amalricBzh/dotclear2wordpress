@@ -1,5 +1,7 @@
 <?php
 
+ini_set('memory_limit', '2047M');
+
 // Settings : Change and customize this according to your future WP blog
 $settings = [
     'author' => [
@@ -295,6 +297,8 @@ class Dotclear2Wordpress
             }
         }
 
+        unset($filecontent);
+
         return $organizedContent;
     }
 
@@ -442,6 +446,8 @@ class Dotclear2Wordpress
 
     protected function addItemNode(DOMDocument $dom, $post, DOMElement $channelNode)
     {
+        $invalid_characters = '/[^\x9\xa\x20-\xD7FF\xE000-\xFFFD]/';
+
         if (!in_array($post['post_type'], ['post', 'page'])) {
             echo "ERROR: Unknown post_type.\n";
             var_dump($post);
@@ -449,7 +455,9 @@ class Dotclear2Wordpress
         }
         $itemNode = $dom->createElement('item');
 
-        $node = $dom->createElement('title', htmlentities($post['post_title']));
+        $node = $dom->createElement('title');
+        $cdata = $dom->createCDATASection($post['post_title']);
+        $node->appendChild($cdata);
         $itemNode->appendChild($node);
 
         $node = $dom->createElement(
@@ -487,7 +495,8 @@ class Dotclear2Wordpress
         $post['post_content'] = str_replace('\n', " ", $post['post_content']);
 
         $node = $dom->createElement('content:encoded');
-        $cdata = $dom->createCDATASection($post['post_content']);
+        $content = preg_replace($invalid_characters, '', $post['post_content'] );
+        $cdata = $dom->createCDATASection($content);
         $node->appendChild($cdata);
         $itemNode->appendChild($node);
 
@@ -1183,6 +1192,7 @@ class Dotclear2Wordpress
                 unset($dotclear['meta']);
             }
         }
+        unset($dotclear['meta']);
         return $dotclear;
     }
 
